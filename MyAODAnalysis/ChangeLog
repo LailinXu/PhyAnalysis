@@ -3,3 +3,6 @@ do truth selection on DAOD
 HistoManager: an independent class to manage histograms
 Analysisllqq: an EventLoop algorithm class
 MyAODAnalysis/util/testllqq.cxx: steering macro
+
+## Sep. 5, 2015
+Added pileup jets study
