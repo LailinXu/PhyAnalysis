@@ -4,8 +4,8 @@
 #include "EventLoop/OutputStream.h"
 
 #include <MyAODAnalysis/Analysisllqq.h>
+#include "CxAODTools/ReturnCheck.h"
 
-#include "xAODEventInfo/EventInfo.h"
 
 #define EL_RETURN_CHECK( CONTEXT, EXP )                              \
   if (EXP !=  EL::StatusCode::SUCCESS) {                      \
@@ -68,8 +68,13 @@ EL::StatusCode Analysisllqq :: histInitialize ()
 
   // book histograms
   // HM->InitVar("Var1,Var2,...",nBin,xMin,xMax);  // use comma "," to separate Var's
+  // for HVT VV truth
   HM->InitVar("TruthPtL1,TruthPtL2",5000,0,5000);
   HM->InitVar("TruthWllM,TruthWqqM,TruthZllM,TruthZqqM,TruthVVM",5000,0,5000);
+  // for Zjets Sherpa Pileup tag jets
+  //HM->InitVar("Mjjtag,Mjjtag_R,Mjjtag_F",5000,0,5000);
+  //HM->InitVar("dEtajj,dEtajj_R,dEtajj_F",2000,0,20);
+  HM->InitVar("TagJ1TruthID,TagJ2TruthID",200,-100,100);
 
   // creat histograms defined in InitVar
   HM->CreateHistoMap();
@@ -124,6 +129,8 @@ EL::StatusCode Analysisllqq :: initialize ()
 
   // initialize xAOD event
   EL_RETURN_CHECK("initialize()",initializeEvent()    );
+  // initialize tools
+  EL_RETURN_CHECK("initialize()",initializeTools()    );
 
   return EL::StatusCode::SUCCESS;
 }
@@ -149,6 +156,26 @@ EL::StatusCode Analysisllqq::initializeEvent() {
   return EL::StatusCode::SUCCESS;
 }
 
+EL::StatusCode Analysisllqq::initializeTools() {
+ 
+  Info("initializeTools()", "Initialize tools.");
+
+  m_OR = new OverlapRemovalTool("OverlapRemovalTool");
+  m_OR->msg().setLevel(MSG::INFO);
+
+  // Set name of decoration which tells the OR tool which objects to consider
+  // if set to "false", the object automatically passes OR, i.e. the OROutputLabel is 0 (as in "do not remove this object").
+  TOOL_CHECK("OverlapRemoval::initialize()", m_OR->setProperty("InputLabel", "ORInputLabel"));
+  // Set name of decoration the OR tool will add as decoration
+  // if decoration is "false" the object should be removed, while if "true" the object should be kept.
+  TOOL_CHECK("OverlapRemoval::initialize()", m_OR->setProperty("OverlapLabel", "OROutputLabel"));
+  TOOL_CHECK("OverlapRemoval::initialize()", m_OR->setProperty("WriteSharedTrackFlag", true));
+
+  TOOL_CHECK("OverlapRemoval::initialize()", m_OR->initialize());
+
+  return EL::StatusCode::SUCCESS;
+}
+
 EL::StatusCode Analysisllqq :: execute ()
 {
   // Here you do everything that needs to be done on every single
@@ -164,116 +191,43 @@ EL::StatusCode Analysisllqq :: execute ()
   HM->ClearVariables();
 
   // retrieve event info
-  const xAOD::EventInfo * eventInfo = 0;
-  EL_RETURN_CHECK( "retrieve_eventInfo()", m_event->retrieve(eventInfo, "EventInfo"));
-  if (!eventInfo) {
-    Error("doTruth()", "EventInfo not found!");
-    return EL::StatusCode::FAILURE;
-  }
+  EL_RETURN_CHECK( "retrieve_m_eventInfo()", m_event->retrieve(m_eventInfo, "EventInfo"));
 
   // retrieve truth particle container
-  const xAOD::TruthParticleContainer* truthParts = NULL;
-  EL_RETURN_CHECK( "retrieve_xTruthParticleContainer()", m_event->retrieve( truthParts, "TruthParticles"));
-  if (!truthParts) {
-    Error("doTruth()", "Did not find truth particles!");
-    return EL::StatusCode::FAILURE;
-  }
+  EL_RETURN_CHECK( "retrieve_xTruthParticleContainer()", m_event->retrieve( m_truthParts, "TruthParticles"));
+  // retrieve truth thin jets
+  //EL_RETURN_CHECK( "retrieve_AntiKt4TruthJets()", m_event->retrieve( m_truthJets, "AntiKt4TruthJets"));
+  // retrieve truth fat jets
+  //EL_RETURN_CHECK( "retrieve_AntiKt10TruthJets()", m_event->retrieve( m_truthFatjets, "AntiKt10TruthJets"));
 
-  // truth particles
-  std::vector<const xAOD::TruthParticle*> truth_Wll, truth_Zll, truth_H, truth_lep, truth_neu;
-  std::vector<const xAOD::TruthParticle*> truth_Wqq, truth_Zqq;
+  EL_RETURN_CHECK( "retrieve_ele()", m_event->retrieve( m_electrons, "Electrons"));
+  EL_RETURN_CHECK( "retrieve_muon()", m_event->retrieve( m_muons, "Muons"));
+  EL_RETURN_CHECK( "retrieve_photon()", m_event->retrieve( m_photons, "Photons"));
+  EL_RETURN_CHECK( "retrieve_tau()", m_event->retrieve( m_taus, "TauJets"));
+  // retrieve reco thin jets
+  EL_RETURN_CHECK( "retrieve_AntiKt4EMTopo()", m_event->retrieve( m_jets, "AntiKt4EMTopoJets"));
+  // retrieve reco fat jets
+  EL_RETURN_CHECK( "retrieve_10LCTpTriPtFr5SmR20()", m_event->retrieve( m_fatjets, "AntiKt10LCTopoTrimmedPtFrac5SmallR20Jets"));
 
-  //std::cout << "Check=> doTruth()" << std::endl;
-  // loop all truth particles
-  for (const xAOD::TruthParticle* particle : *truthParts) {
-    int barcode = particle->barcode();
-    int status = particle->status();
-    int pdgId = particle->pdgId();
+  // check if the MC sample is interesting to us
+  int mc_channel = m_eventInfo->mcChannelNumber();
+  // Sherpa Z+jets: 361372-361395,361396-361419,361420-361443
+  // HVT: 301390-302414
+  bool isZjets = false, isHVTVV = false, isPowhegH = false;
+  if( mc_channel >=301390 && mc_channel <=302414) isHVTVV = true; 
+  if( mc_channel >=361372 && mc_channel <=361443) isZjets = true; 
+  if( mc_channel >=341339 && mc_channel <=341344) isPowhegH = true; 
 
-    float px = particle->px();
+  if( !isHVTVV && !isZjets && !isPowhegH) return EL::StatusCode::SUCCESS;
 
-    //std::cout << "Check=> doTruth() pdgId: " << pdgId << " status: " << status << std::endl;
-    // find the child particles from V boson
-    if((pdgId==23 || pdgId==24 || pdgId==25) && status==22) {
-      int nChild=particle->nChildren();
-      int nChild_l=0, nChild_q=0;
-      for(int ich=0; ich<nChild; ich++) {
-        const xAOD::TruthParticle* ch = particle->child(ich);
-        int tmp_barcode = ch->barcode();
-        int tmp_status = ch->status();
-        int tmp_pdgId = ch->pdgId();
-        if(fabs(tmp_pdgId)==11 || fabs(tmp_pdgId)==13 || fabs(tmp_pdgId)==15) nChild_l++;
-        if(fabs(tmp_pdgId)==12 || fabs(tmp_pdgId)==14 || fabs(tmp_pdgId)==16) nChild_l++;
-        if(fabs(tmp_pdgId)<=6) nChild_q++;
-      }
-      int decay_mode=-1;
-      if(nChild_l==2 && nChild_q==0) decay_mode=1; //leptonic decay
-      if(nChild_l==0 && nChild_q==2) decay_mode=2; //hadronic decay
-      //std::cout << "Check=> doTruth: pdgId= " << pdgId << " nChild_l= " << nChild_l << " nChild_q= " << nChild_q << std::endl;
+  // overlap removal for reco jets (thin jets only)
+  doOverlapRM();
 
-      if(pdgId==23 && decay_mode==1)      truth_Zll.push_back(particle);
-      else if(pdgId==23 && decay_mode==2) truth_Zqq.push_back(particle);
-      else if(pdgId==24 && decay_mode==1) truth_Wll.push_back(particle);
-      else if(pdgId==24 && decay_mode==2) truth_Wqq.push_back(particle);
-      if(pdgId==25) truth_H.push_back(particle);
+  // HVT VV truth 
+  if(isHVTVV) fillHVTVV();
 
-    }
-
-    // find the parent particles 
-    if((fabs(pdgId)==11 || fabs(pdgId)==13 || fabs(pdgId)==15) && status==1) {
-      if(TraceUp(particle)) truth_lep.push_back(particle);
-      //if(TraceUp(particle)) std::cout << "Check=> doTruth: found leptons from V decay" << std::endl;
-    } 
-    if((fabs(pdgId)==12 || fabs(pdgId)==14 || fabs(pdgId)==16) && status==1) {
-      if(TraceUp(particle)) truth_neu.push_back(particle);
-      //if(TraceUp(particle)) std::cout << "Check=> doTruth: found neutrino from V decay" << std::endl;
-    } 
-  }
-
-  // sort the particle vectors by pt
-  std::sort(truth_lep.begin(), truth_lep.end(), sort_par_pt);
-  std::sort(truth_Wll.begin(), truth_Wll.end(), sort_par_pt);
-  std::sort(truth_Zll.begin(), truth_Zll.end(), sort_par_pt);
-  std::sort(truth_Wqq.begin(), truth_Wqq.end(), sort_par_pt);
-  std::sort(truth_Zqq.begin(), truth_Zqq.end(), sort_par_pt);
-
-  // get the interesting variables
-  TLorentzVector tlz_VV, tlz_Vll, tlz_Vqq;
-  if(truth_Wll.size()>0) {
-    const xAOD::TruthParticle* par = truth_Wll.at(0);
-    //float mV = par->m()/1000.;  HM->Var["TruthWllM"]=mV;
-    float mV = par->p4().M()/1000.;  HM->Var["TruthWllM"]=mV;
-  }
-  if(truth_Wqq.size()>0) {
-    const xAOD::TruthParticle* par = truth_Wqq.at(0);
-    tlz_Vqq = par->p4();
-    //float mV = par->m()/1000.;  HM->Var["TruthWqqM"]=mV;
-    float mV = par->p4().M()/1000.;  HM->Var["TruthWqqM"]=mV;
-  }
-  if(truth_Zll.size()>0) {
-    const xAOD::TruthParticle* par = truth_Zll.at(0);
-    tlz_Vll = par->p4();
-    //float mV = par->m()/1000.;  HM->Var["TruthZllM"]=mV;
-    float mV = par->p4().M()/1000.;  HM->Var["TruthZllM"]=mV;
-  }
-  if(truth_Zqq.size()>0) {
-    const xAOD::TruthParticle* par = truth_Zqq.at(0);
-    //float mV = par->m()/1000.;  HM->Var["TruthZqqM"]=mV;
-    float mV = par->p4().M()/1000.;  HM->Var["TruthZqqM"]=mV;
-  }
-  if(truth_lep.size()>0) {
-    const xAOD::TruthParticle* par = truth_lep.at(0);
-    float truth_pt = par->pt()/1000.;  HM->Var["TruthL1Pt"]=truth_pt;
-    if(truth_lep.size()>1) {
-      par = truth_lep.at(1);
-      truth_pt = par->pt()/1000.;  HM->Var["TruthL2Pt"]=truth_pt;
-    }
-  }
-
-  if(tlz_Vll.M()>0 && tlz_Vqq.M()>0) {
-    tlz_VV = tlz_Vll + tlz_Vqq;
-    HM->Var["TruthVVM"]=tlz_VV.M()/1000.;
-  }
+  // Z+jets pileup VBF tag jets
+  if(isZjets || isPowhegH) fillZjetsPU();
 
   // Fill histograms
   HM->FillHistograms();

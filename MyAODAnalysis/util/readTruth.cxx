@@ -167,15 +167,16 @@ int main(int argc, char* argv[]) {
           const xAOD::TruthVertex* decayVtx = particle->decayVtx();
 
           // find the child particles from V boson
-          if(pdgId>=11 && pdgId<=16 || pdgId==23 || pdgId==24 || pdgId==25) {
+          if(fabs(pdgId)>=11 && fabs(pdgId)<=16 || pdgId==23 || pdgId==24 || pdgId==25 || fabs(pdgId)<6 && (status==3 || status==11)) {
             std::cout << "Check=> truth par pdgId: " << pdgId << " status: " << status << std::endl;
             int nChild=particle->nChildren();
             for(int ich=0; ich<nChild; ich++) {
               const xAOD::TruthParticle* ch = particle->child(ich);
-              barcode = ch->barcode();
-              status = ch->status();
-              pdgId = ch->pdgId();
-              std::cout << "Check=>   child: " << pdgId << " status: " << status << std::endl;
+              if(!ch) continue;
+              int tmp_barcode = ch->barcode();
+              int tmp_status = ch->status();
+              int tmp_pdgId = ch->pdgId();
+              std::cout << "Check=>   child: " << tmp_pdgId << " status: " << tmp_status << std::endl;
             }
           }
 
@@ -185,10 +186,11 @@ int main(int argc, char* argv[]) {
             int nPar=particle->nParents();
             for(int ich=0; ich<nPar; ich++) {
               const xAOD::TruthParticle* ch = particle->parent(ich);
-              barcode = ch->barcode();
-              status = ch->status();
-              pdgId = ch->pdgId();
-              std::cout << "Check=>   mother: " << pdgId << " status: " << status << std::endl;
+              if(!ch) continue;
+              int tmp_barcode = ch->barcode();
+              int tmp_status = ch->status();
+              int tmp_pdgId = ch->pdgId();
+              std::cout << "Check=>   mother: " << tmp_pdgId << " status: " << tmp_status << std::endl;
             }
           }
         }
